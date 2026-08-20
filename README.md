@@ -33,8 +33,8 @@ Stop the server with `Ctrl+C`.
 
 ## Main data flow
 
-1. The browser retrieves current ISS telemetry from Where The ISS At.
-2. `/api/orbit` retrieves current GP/TLE data from CelesTrak.
+1. `/api/orbit` retrieves current ISS and TDRSS GP/TLE data from CelesTrak.
+2. One simulation clock supplies the shared propagation epoch for every view.
 3. `satellite.js` propagates the ISS and TDRSS positions.
 4. `page.tsx` draws the world map, ground tracks, links, telemetry, and menus.
 5. `Orbit3D.tsx` converts the ISS position into the Earth-fixed Three.js scene.
@@ -45,7 +45,8 @@ Stop the server with `Ctrl+C`.
 - Web pages cannot silently overwrite a file in your Downloads folder. The dashboard updates its internal CSV data every 10 seconds, then writes the accumulated data when you export it.
 - The `.glb` files are binary 3D assets, not application code. Edit them in Blender if you want to change the physical models. Keep their filenames and export them as GLB so the existing loader continues to work.
 - The displayed TDRSS relay selection is simulated from geometric line of sight. It is not NASA's operational relay assignment.
-- The state-vector velocity is track-derived and labeled as such. Current latitude, longitude, altitude, and scalar speed come from the live ISS telemetry source.
+- Run advances the shared simulation clock, Hold freezes it, and Sync refreshes GP data and snaps every display to the current UTC epoch.
+- CelesTrak, propagation, TDRSS freshness, CSV cadence, WebGL, and GLB fallback states are annunciated instead of failing silently.
 
 ## Useful commands
 

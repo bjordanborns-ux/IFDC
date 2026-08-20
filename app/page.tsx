@@ -8,6 +8,7 @@ import {
   propagateIss,
   propagateRelays,
   propagateTrack,
+  newestTleEpoch,
   tleEpoch,
   type OrbitalState,
   type RelayState,
@@ -17,7 +18,9 @@ import {
 type Telemetry = OrbitalState;
 type Point = TrackPoint;
 type Relay = RelayState;
-type CsvSample = Telemetry & { sampledAt: string };
+type CsvSample = Telemetry & { sampledAt: string; sequence: number };
+type Severity = "ok" | "caution" | "warning";
+type Alert = { id: string; severity: Severity; text: string };
 
 // Fixed TDRSS ground terminals shown on the tracker.
 const terminals = [
@@ -359,6 +362,12 @@ export default function Home() {
     [mapMax, setMapMax] = useState(false),
     [cameraKey, setCameraKey] = useState(0),
     [gpEpoch, setGpEpoch] = useState("LOADING"),
+    [tdrsEpochMs, setTdrsEpochMs] = useState(0),
+    [lastElementUpdateMs, setLastElementUpdateMs] = useState(0),
+    [lastPropagationMs, setLastPropagationMs] = useState(0),
+    [lastSampleMs, setLastSampleMs] = useState(0),
+    [sampleCadenceOk, setSampleCadenceOk] = useState(true),
+    [assetWarnings, setAssetWarnings] = useState<Record<string, string>>({}),
     [notice, setNotice] = useState("Ready"),
     [utc, setUtc] = useState(""),
     [dialog, setDialog] = useState<{ title: string; body: string } | null>(
@@ -368,11 +377,35 @@ export default function Home() {
   const issTle = useRef("");
   const tdrsTle = useRef("");
   const pausedRef = useRef(paused);
+  const simulationClock = useRef({ epochMs: Date.now(), wallMs: Date.now() });
+  const sampleSequence = useRef(0);
   pausedRef.current = paused;
+
+  const currentSimulationEpoch = (wallMs = Date.now()) =>
+    simulationClock.current.epochMs +
+    (pausedRef.current ? 0 : wallMs - simulationClock.current.wallMs);
+
+  const commandRun = () => {
+    if (!pausedRef.current) return;
+    simulationClock.current.wallMs = Date.now();
+    pausedRef.current = false;
+    setPaused(false);
+    setNotice("PROPAGATION RUNNING — SIMULATION CLOCK ADVANCING");
+  };
+
+  const commandHold = () => {
+    if (pausedRef.current) return;
+    const wallMs = Date.now();
+    simulationClock.current.epochMs = currentSimulationEpoch(wallMs);
+    simulationClock.current.wallMs = wallMs;
+    pausedRef.current = true;
+    setPaused(true);
+    setNotice("PROPAGATION HOLD — COMMON EPOCH FROZEN");
+  };
 
   // Every display product is generated from this one epoch and one ISS TLE.
   const propagateSameEpoch = (epoch: Date) => {
-    if (!issTle.current) return;
+    if (!issTle.current) throw new Error("ISS element set unavailable");
     const state = propagateIss(issTle.current, epoch);
     const past = propagateTrack(issTle.current, epoch, -93, 0, 0.75);
     const future = propagateTrack(issTle.current, epoch, 0, 93, 0.75);
@@ -385,11 +418,10 @@ export default function Home() {
     if (tdrsTle.current) {
       setRelays(propagateRelays(tdrsTle.current, epoch, state));
     }
-    setLink(true);
+    setLastPropagationMs(Date.now());
   };
 
-  const loadOrbitalElements = async () => {
-    const epoch = new Date();
+  const loadOrbitalElements = async (epoch: Date) => {
     const [issResponse, tdrsResponse] = await Promise.all([
       fetch("/api/orbit?mode=iss", { cache: "no-store" }),
       fetch("/api/orbit?mode=tdrs", { cache: "no-store" }),
@@ -397,12 +429,21 @@ export default function Home() {
     if (!issResponse.ok || !tdrsResponse.ok) {
       throw new Error("Orbital element source unavailable");
     }
-    issTle.current = await issResponse.text();
-    tdrsTle.current = await tdrsResponse.text();
+    const nextIssTle = await issResponse.text();
+    const nextTdrsTle = await tdrsResponse.text();
+    // Validate both payloads before replacing the last known-good solution.
+    const issEpoch = tleEpoch(nextIssTle);
+    const relayEpoch = newestTleEpoch(nextTdrsTle);
+    propagateIss(nextIssTle, epoch);
+    issTle.current = nextIssTle;
+    tdrsTle.current = nextTdrsTle;
     setGpEpoch(
-      tleEpoch(issTle.current).toISOString().slice(0, 19).replace("T", " "),
+      issEpoch.toISOString().slice(0, 19).replace("T", " "),
     );
+    setTdrsEpochMs(relayEpoch.getTime());
+    setLastElementUpdateMs(Date.now());
     propagateSameEpoch(epoch);
+    setLink(true);
     setNotice("COMMON-EPOCH SGP4 SOLUTION VALID — ISS + TDRSS");
   };
 
@@ -411,7 +452,9 @@ export default function Home() {
     setSyncing(true);
     setNotice("SYNC IN PROGRESS — COMMON UTC EPOCH");
     try {
-      await loadOrbitalElements();
+      const now = Date.now();
+      simulationClock.current = { epochMs: now, wallMs: now };
+      await loadOrbitalElements(new Date(now));
       setCameraKey((value) => value + 1);
     } catch {
       setLink(false);
@@ -427,17 +470,26 @@ export default function Home() {
       () => setUtc(new Date().toISOString().slice(11, 19)),
       1000,
     );
-    loadOrbitalElements().catch(() => {
+    const now = Date.now();
+    simulationClock.current = { epochMs: now, wallMs: now };
+    loadOrbitalElements(new Date(now)).catch(() => {
       setLink(false);
       setNotice("CELESTRAK LINK ERROR — WAITING FOR SYNC");
     });
     const propagationTimer = setInterval(() => {
-      if (!pausedRef.current) propagateSameEpoch(new Date());
-    }, 5000);
+      if (!pausedRef.current) {
+        try {
+          propagateSameEpoch(new Date(currentSimulationEpoch()));
+        } catch {
+          setLink(false);
+          setNotice("PROPAGATION ERROR — DISPLAY FROZEN AT LAST VALID STATE");
+        }
+      }
+    }, 1000);
     // CelesTrak asks clients not to request GP data more often than two hours.
     const elementTimer = setInterval(
       () => {
-        loadOrbitalElements().catch(() =>
+        loadOrbitalElements(new Date(currentSimulationEpoch())).catch(() =>
           setNotice("GP REFRESH DEFERRED — LAST VALID ELEMENT SET ACTIVE"),
         );
       },
@@ -451,13 +503,17 @@ export default function Home() {
   }, []);
   useEffect(() => {
     // Add one telemetry.csv row every ten seconds while the page is open.
-    const sample = () =>
+    const sample = () => {
+      const sampledAtMs = Date.now();
+      setLastSampleMs((previous) => {
+        if (previous) setSampleCadenceOk(Math.abs(sampledAtMs - previous - 10000) <= 1500);
+        return sampledAtMs;
+      });
+      sampleSequence.current += 1;
       setSamples((rows) =>
-        [
-          ...rows,
-          { ...latest.current, sampledAt: new Date().toISOString() },
-        ].slice(-8640),
+        [...rows, { ...latest.current, sampledAt: new Date(sampledAtMs).toISOString(), sequence: sampleSequence.current }].slice(-8640),
       );
+    };
     sample();
     const csv = setInterval(sample, 10000);
     return () => clearInterval(csv);
@@ -474,10 +530,10 @@ export default function Home() {
   }, [t]);
   const exportCsv = () => {
     const rows = [
-      "sample_time_utc,source_timestamp_unix,latitude_deg,longitude_deg,altitude_km,velocity_kmh,visibility",
+      "sequence,sample_time_utc,simulation_epoch_utc,source_timestamp_unix,latitude_deg,longitude_deg,altitude_km,velocity_kmh,eci_x_km,eci_y_km,eci_z_km,eci_vx_km_s,eci_vy_km_s,eci_vz_km_s,solution",
       ...samples.map(
         (s) =>
-          `${s.sampledAt},${s.timestamp},${s.latitude},${s.longitude},${s.altitude},${s.velocity},${s.visibility}`,
+          `${s.sequence},${s.sampledAt},${new Date(s.epochMs).toISOString()},${s.timestamp},${s.latitude},${s.longitude},${s.altitude},${s.velocity},${s.positionEci.x},${s.positionEci.y},${s.positionEci.z},${s.velocityEci.x},${s.velocityEci.y},${s.velocityEci.z},${s.visibility}`,
       ),
     ];
     const a = document.createElement("a");
@@ -487,6 +543,19 @@ export default function Home() {
     a.download = "telemetry.csv";
     a.click();
     URL.revokeObjectURL(a.href);
+    setNotice(`CSV EXPORT COMPLETE — ${samples.length} VERIFIED 10-SECOND SAMPLES`);
+  };
+  const operatorValues = () => {
+    const epoch = new Date(t.epochMs).toISOString();
+    return [
+      `ISS CURRENT VALUES | ${pausedRef.current ? "HOLD" : "RUN"}`,
+      `Epoch (UTC): ${epoch}`,
+      `Position ECI (km): X ${stateVector.x.toFixed(3)} | Y ${stateVector.y.toFixed(3)} | Z ${stateVector.z.toFixed(3)}`,
+      `Velocity ECI (km/s): VX ${stateVector.vx.toFixed(5)} | VY ${stateVector.vy.toFixed(5)} | VZ ${stateVector.vz.toFixed(5)}`,
+      `Geodetic: LAT ${t.latitude.toFixed(5)} deg | LON ${t.longitude.toFixed(5)} deg | ALT ${t.altitude.toFixed(3)} km`,
+      `Speed: ${(t.velocity / 3600).toFixed(5)} km/s`,
+      `Solution: CelesTrak GP / SGP4 | TDRSS relay assignment simulated`,
+    ].join("\n");
   };
   const openDialog = (title: string, body: string) =>
     setDialog({ title, body });
@@ -501,19 +570,11 @@ export default function Home() {
     else if (item.includes("Reset 3D") || item.includes("Center on"))
       setCameraKey((v) => v + 1);
     else if (item.includes("Sync propagation")) syncAll();
-    else if (item.includes("Run / hold")) setPaused((v) => !v);
-    else if (item.includes("Copy"))
-      navigator.clipboard?.writeText(
-        JSON.stringify(
-          {
-            epochUtc: new Date(t.epochMs).toISOString(),
-            issEci: stateVector,
-            tdrss: relays,
-          },
-          null,
-          2,
-        ),
-      );
+    else if (item.includes("Run / hold")) pausedRef.current ? commandRun() : commandHold();
+    else if (item.includes("Copy")) {
+      navigator.clipboard?.writeText(operatorValues());
+      setNotice("CURRENT VALUES COPIED — OPERATOR NOTE FORMAT");
+    }
     else if (item.includes("Show / hide")) setShowViews((v) => !v);
     else if (item.includes("Maximize")) setMapMax((v) => !v);
     else if (item.includes("Data sources"))
@@ -534,9 +595,17 @@ export default function Home() {
     else if (item.includes("state vector"))
       openDialog(
         "ISS STATE VECTOR — ECI / SGP4",
-        `EPOCH ${new Date(t.epochMs).toISOString()}\n\nPOSITION ECI (km)\nX  ${stateVector.x.toFixed(3)}\nY  ${stateVector.y.toFixed(3)}\nZ  ${stateVector.z.toFixed(3)}\n\nVELOCITY ECI (km/s)\nVX ${stateVector.vx.toFixed(5)}\nVY ${stateVector.vy.toFixed(5)}\nVZ ${stateVector.vz.toFixed(5)}\n\nWGS84 LAT ${t.latitude.toFixed(5)}°  LON ${t.longitude.toFixed(5)}°\nALT ${t.altitude.toFixed(3)} km  SPEED ${(t.velocity / 3600).toFixed(5)} km/s`,
+        `${operatorValues()}\n\nPOSITION ECF (km)\nX  ${t.positionEcf.x.toFixed(3)}\nY  ${t.positionEcf.y.toFixed(3)}\nZ  ${t.positionEcf.z.toFixed(3)}\n\nMAGNITUDES\nR  ${Math.hypot(stateVector.x, stateVector.y, stateVector.z).toFixed(3)} km\nV  ${Math.hypot(stateVector.vx, stateVector.vy, stateVector.vz).toFixed(5)} km/s\n\nElement age: ${gpEpoch === "LOADING" ? "UNKNOWN" : ((Date.now() - tleEpoch(issTle.current).getTime()) / 3600000).toFixed(1) + " h"}\nFrame note: ECI is TEME-compatible SGP4 output; ECF/geodetic use GMST/WGS84.`,
       );
   };
+  const nowMs = Date.now();
+  const alerts: Alert[] = [
+    { id: "link", severity: link ? "ok" : "warning", text: link ? "CELESTRAK LINK / LAST UPDATE VALID" : "CELESTRAK UPDATE UNAVAILABLE — LAST VALID DATA RETAINED" },
+    { id: "prop", severity: !paused && lastPropagationMs && nowMs - lastPropagationMs > 5000 ? "warning" : paused ? "caution" : "ok", text: paused ? "PROPAGATION HELD BY OPERATOR" : lastPropagationMs && nowMs - lastPropagationMs > 5000 ? "PROPAGATION STALLED — EPOCH NOT ADVANCING" : "PROPAGATION CLOCK ADVANCING" },
+    { id: "tdrs", severity: tdrsEpochMs && nowMs - tdrsEpochMs > 7 * 86400000 ? "caution" : relays.length ? "ok" : "warning", text: !relays.length ? "TDRSS EPHEMERIS UNAVAILABLE" : tdrsEpochMs && nowMs - tdrsEpochMs > 7 * 86400000 ? `TDRSS EPHEMERIS STALE — ${((nowMs - tdrsEpochMs) / 86400000).toFixed(1)} DAYS` : "TDRSS EPHEMERIS CURRENT" },
+    { id: "csv", severity: sampleCadenceOk && (!lastSampleMs || nowMs - lastSampleMs < 12500) ? "ok" : "warning", text: sampleCadenceOk && (!lastSampleMs || nowMs - lastSampleMs < 12500) ? "CSV LOGGER 10-SECOND CADENCE VALID" : "CSV LOGGER CADENCE MISSED" },
+    ...Object.entries(assetWarnings).map(([id, text]) => ({ id, severity: "caution" as const, text })),
+  ];
   const epochLabel = t.epochMs
     ? new Date(t.epochMs).toISOString().slice(11, 19)
     : "--:--:--";
@@ -574,13 +643,13 @@ export default function Home() {
       </div>
       <div className="toolbar">
         <button
-          onClick={() => setPaused(false)}
+          onClick={commandRun}
           className={!paused ? "pressed" : ""}
         >
           ▶ RUN
         </button>
         <button
-          onClick={() => setPaused(true)}
+          onClick={commandHold}
           className={paused ? "pressed" : ""}
         >
           Ⅱ HOLD
@@ -625,6 +694,7 @@ export default function Home() {
                 velocityEci={t.velocityEci}
                 gmst={t.gmst}
                 mode="CHASE"
+                onHealth={(mode, message) => setAssetWarnings((current) => { const next = { ...current }; if (message) next[mode] = `${mode} VIEW: ${message}`; else delete next[mode]; return next; })}
               />
             </div>
             <div className="window">
@@ -635,6 +705,7 @@ export default function Home() {
                 velocityEci={t.velocityEci}
                 gmst={t.gmst}
                 mode="NADIR"
+                onHealth={(mode, message) => setAssetWarnings((current) => { const next = { ...current }; if (message) next[mode] = `${mode} VIEW: ${message}`; else delete next[mode]; return next; })}
               />
             </div>
           </div>
@@ -645,13 +716,13 @@ export default function Home() {
           <b>PROPAGATION</b>
           <button
             className={!paused ? "pressed" : ""}
-            onClick={() => setPaused(false)}
+            onClick={commandRun}
           >
             Run
           </button>
           <button
             className={paused ? "pressed" : ""}
-            onClick={() => setPaused(true)}
+            onClick={commandHold}
           >
             Hold
           </button>
@@ -676,13 +747,17 @@ export default function Home() {
         </div>
         <div>
           <b>STATUS</b>
-          <span className="green">■ ISS VALID</span>
-          <span className="green">■ EPOCH {epochLabel} UTC</span>
-          <span className="green">■ CSV {samples.length} SAMPLES</span>
-          <span className="green">
+          <span className={link ? "green" : "red"}>■ ISS {link ? "VALID" : "DEGRADED"}</span>
+          <span className={paused ? "amber" : "green"}>■ EPOCH {epochLabel} UTC</span>
+          <span className={sampleCadenceOk ? "green" : "red"}>■ CSV {samples.length} SAMPLES</span>
+          <span className={relays.length ? "green" : "red"}>
             ■ TDRSS {relays.length ? `${relays.length} OBJECTS` : "INIT"}
           </span>
         </div>
+      </div>
+      <div className="annunciator" role="status" aria-live="polite">
+        {alerts.filter((alert) => alert.severity !== "ok").length ? alerts.filter((alert) => alert.severity !== "ok").map((alert) => <span key={alert.id} className={alert.severity}>▲ {alert.text}</span>) : <span className="ok">● ALL MONITORED SYSTEMS NOMINAL</span>}
+        {lastElementUpdateMs > 0 && <small>LAST GP UPDATE {new Date(lastElementUpdateMs).toISOString().slice(11, 19)} UTC</small>}
       </div>
       <div className="statusbar">
         <span>{notice}</span>

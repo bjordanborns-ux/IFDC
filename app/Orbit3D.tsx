@@ -16,6 +16,7 @@ type Orbit3DProps = {
   velocityEci: Vec3;
   gmst: number;
   mode: "CHASE" | "NADIR";
+  onHealth?: (mode: "CHASE" | "NADIR", message: string | null) => void;
 };
 
 // ECI uses Z through the north pole. Three.js uses Y as its vertical axis.
@@ -57,6 +58,7 @@ export default function Orbit3D(props: Orbit3DProps) {
     if (!context) {
       host.innerHTML =
         '<div class="fallback-earth"><b>3D VIEW REQUIRES WEBGL</b></div>';
+      props.onHealth?.(props.mode, "WEBGL UNAVAILABLE");
       return;
     }
 
@@ -119,11 +121,13 @@ export default function Orbit3D(props: Orbit3DProps) {
         fallbackEarth.visible = false;
         earthLoaded = true;
         updateBadge();
+        if (issLoaded) props.onHealth?.(props.mode, null);
       },
       undefined,
       () => {
         earthLoaded = true;
         if (badge) badge.textContent = "EARTH GLB ERROR • SAFE SPHERE ACTIVE";
+        props.onHealth?.(props.mode, "EARTH GLB FAILED — SAFE SPHERE ACTIVE");
       },
     );
 
@@ -178,12 +182,14 @@ export default function Orbit3D(props: Orbit3DProps) {
         station.add(model);
         issLoaded = true;
         updateBadge();
+        if (earthLoaded) props.onHealth?.(props.mode, null);
       },
       undefined,
       () => {
         addFallbackIss();
         issLoaded = true;
         if (badge) badge.textContent = "ISS GLB ERROR • BACKUP MODEL ACTIVE";
+        props.onHealth?.(props.mode, "ISS GLB FAILED — BACKUP MODEL ACTIVE");
       },
     );
 

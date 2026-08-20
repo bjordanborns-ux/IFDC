@@ -16,7 +16,7 @@ body {
   height: 100vh;
   min-height: 720px;
   display: grid;
-  grid-template-rows: 24px 22px 34px 1fr 54px 20px;
+  grid-template-rows: 24px 22px 34px 1fr 54px 22px 20px;
   padding: 2px;
   background: #b7b7b7;
   border: 1px solid #071d54;
@@ -569,6 +569,26 @@ body {
   color: #075a0d;
   font-size: 9px;
 }
+.control-strip .amber { color: #8a5500; font-size: 9px; }
+.control-strip .red { color: #a40000; font-size: 9px; font-weight: bold; }
+.annunciator {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 6px;
+  border-top: 1px solid #777;
+  background: #171717;
+  color: #eee;
+  font: 10px "Courier New", monospace;
+  overflow-x: auto;
+}
+.annunciator span { white-space: nowrap; padding: 2px 6px; border: 1px solid currentColor; }
+.annunciator .ok { color: #59e06b; }
+.annunciator .caution { color: #ffcc38; background: #5a4300; }
+.annunciator .warning { color: #fff; background: #a40000; animation: warningPulse 1.2s step-end infinite; }
+.annunciator small { margin-left: auto; white-space: nowrap; color: #aaa; }
+@keyframes warningPulse { 50% { background: #510000; } }
 .statusbar {
   height: 20px;
   background: #dedbd0;
@@ -587,7 +607,7 @@ body {
   .desktop-shell {
     min-height: 1000px;
     height: auto;
-    grid-template-rows: 24px 22px 34px 820px auto 20px;
+    grid-template-rows: 24px 22px 34px 820px auto 22px 20px;
   }
   .workspace {
     grid-template-rows: 47% 53%;

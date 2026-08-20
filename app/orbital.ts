@@ -56,6 +56,21 @@ export function tleEpoch(tle: string) {
   );
 }
 
+export function newestTleEpoch(tleCatalog: string) {
+  const lines = tleCatalog.trim().split(/\r?\n/);
+  let newest = 0;
+  for (const line of lines) {
+    if (!line.startsWith("1 ")) continue;
+    try {
+      newest = Math.max(newest, tleEpoch(`${line}\n2 00000`).getTime());
+    } catch {
+      // tleEpoch only reads line 1; malformed catalog records are ignored.
+    }
+  }
+  if (!newest) throw new Error("TLE catalog has no valid epochs");
+  return new Date(newest);
+}
+
 export function propagateIss(tle: string, epoch: Date): OrbitalState {
   const { line1, line2 } = tleLines(tle);
   const result = propagate(twoline2satrec(line1, line2), epoch);
