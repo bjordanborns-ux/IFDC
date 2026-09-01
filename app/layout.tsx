@@ -1,19 +1,19 @@
 import type { Metadata } from "next";
 import "./globals.css";
 export const metadata: Metadata = {
-  metadataBase: new URL("https://iss-mission-control.kola-koala.chatgpt.site"),
-  title: "ISS Mission Control",
+  metadataBase: new URL("https://ifdc-console.kola-koala.chatgpt.site"),
+  title: "IFDC Integrated Flight Dynamics Console",
   description:
-    "Live International Space Station ground track, telemetry, and simulated orbital camera console.",
+    "Common-epoch ISS, Starlink, and TDRSS orbital tracking, telemetry, and simulated mission-operations views.",
   openGraph: {
-    title: "ISS Mission Control",
-    description: "Live orbital tracking and telemetry",
+    title: "IFDC Integrated Flight Dynamics Console",
+    description: "ISS, Starlink, and TDRSS orbital tracking and telemetry",
     images: ["/og.png"],
   },
   twitter: {
     card: "summary_large_image",
-    title: "ISS Mission Control",
-    description: "Live orbital tracking and telemetry",
+    title: "IFDC Integrated Flight Dynamics Console",
+    description: "ISS, Starlink, and TDRSS orbital tracking and telemetry",
     images: ["/og.png"],
   },
 };

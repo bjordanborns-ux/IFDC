@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-
-test("renders development preview metadata", async () => {
+test("renders the production IFDC console metadata and controls", async () => {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -26,5 +23,9 @@ test("renders development preview metadata", async () => {
 
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-  assert.match(await response.text(), developmentPreviewMeta);
+  const html = await response.text();
+  assert.match(html, /<title>IFDC Integrated Flight Dynamics Console<\/title>/i);
+  assert.match(html, /ISS \/ STARLINK \/ TDRSS Real-Time Network Map/i);
+  assert.match(html, /aria-label="Selected Starlink satellite"/i);
+  assert.doesNotMatch(html, /name=["']codex-preview["']/i);
 });

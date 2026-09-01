@@ -829,3 +829,10 @@ body {
     min-height: 240px;
   }
 }
+.starlink-marker { fill: #63d9ff; opacity: .72; cursor: pointer; vector-effect: non-scaling-stroke; }
+.starlink-marker:hover, .starlink-marker.selected { fill: #fff; stroke: #ffdf42; stroke-width: .22; opacity: 1; }
+.starlink-track { fill: none; stroke: #ffdf42; stroke-width: .32; stroke-dasharray: 1.2 .65; filter: drop-shadow(0 0 1px #ffdf42); }
+.layer-controls { min-width: 320px; }
+.layer-controls label { display: inline-flex !important; align-items: center; gap: 3px; margin-right: 7px; }
+.layer-controls input { accent-color: #49d5ff; }
+.layer-controls select { max-width: 190px; background: #081017; color: #d9f5ff; border: 1px solid #617888; font: inherit; }

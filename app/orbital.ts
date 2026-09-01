@@ -35,6 +35,13 @@ export type RelayState = TrackPoint & {
   positionEcf: Vec3;
 };
 
+export type CatalogSatellite = TrackPoint & {
+  name: string;
+  noradId: string;
+  alt: number;
+  tle: string;
+};
+
 const EARTH_EQUATORIAL_KM = 6378.137;
 const EARTH_POLAR_KM = 6356.752314245;
 
@@ -134,6 +141,32 @@ export function propagateTrack(
   }
 
   return points;
+}
+
+export function propagateCatalog(tleCatalog: string, epoch: Date) {
+  const lines = tleCatalog.trim().split(/\r?\n/);
+  const satellites: CatalogSatellite[] = [];
+  const theta = gstime(epoch);
+  for (let index = 0; index < lines.length - 2; index += 1) {
+    const name = lines[index].trim();
+    const line1 = lines[index + 1];
+    const line2 = lines[index + 2];
+    if (!/^STARLINK/i.test(name) || !line1.startsWith("1 ") || !line2.startsWith("2 ")) continue;
+    const tle = `${name}\n${line1}\n${line2}`;
+    const result = propagate(twoline2satrec(line1, line2), epoch);
+    if (!result.position || typeof result.position === "boolean") continue;
+    const geodetic = eciToGeodetic(result.position, theta);
+    satellites.push({
+      name,
+      noradId: line1.slice(2, 7).trim(),
+      lat: degreesLat(geodetic.latitude),
+      lon: degreesLong(geodetic.longitude),
+      alt: geodetic.height,
+      tle,
+    });
+    index += 2;
+  }
+  return satellites;
 }
 
 // Segment-versus-WGS84-ellipsoid test. Scaling ECF coordinates turns the

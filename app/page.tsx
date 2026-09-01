@@ -6,6 +6,7 @@ import { feature } from "topojson-client";
 import land110 from "world-atlas/land-110m.json";
 import {
   propagateIss,
+  propagateCatalog,
   propagateRelays,
   propagateTrack,
   newestTleEpoch,
@@ -13,6 +14,7 @@ import {
   type OrbitalState,
   type RelayState,
   type TrackPoint,
+  type CatalogSatellite,
 } from "./orbital";
 
 type Telemetry = OrbitalState;
@@ -21,6 +23,29 @@ type Relay = RelayState;
 type CsvSample = Telemetry & { sampledAt: string; sequence: number };
 type Severity = "ok" | "caution" | "warning";
 type Alert = { id: string; severity: Severity; text: string };
+
+// Dated last-known-good elements keep the console operational during a total
+// upstream outage. They are never presented as current data and are replaced
+// atomically as soon as either live source validates.
+const BUNDLED_ISS_TLE = `ISS (ZARYA)
+1 25544U 98067A   26234.04909235  .00009068  00000+0  16914-3 0  9995
+2 25544  51.6330 334.1166 0007690  71.1509 289.0313 15.49562116581964`;
+
+const BUNDLED_TDRSS_TLE = `TDRS 3
+1 19548U 88091B   26234.18529962 -.00000296  00000+0  00000+0 0  9998
+2 19548  12.5525 340.5571 0036977 353.5868  14.1011  1.00267569126052
+TDRS 5
+1 21639U 91054B   26233.63169843  .00000084  00000+0  00000+0 0  9996
+2 21639  14.0633 353.2855 0007695 247.8459 148.5712  1.00271403128374
+TDRS 6
+1 22314U 93003B   26234.18599295 -.00000295  00000+0  00000+0 0  9997
+2 22314  14.1845 356.5588 0010079 194.3952 160.4997  1.00265854123066
+TDRS 7
+1 23613U 95035B   26233.84513889 -.00000238  00000+0  00000+0 0  9991
+2 23613  13.3098 347.7291 0012312  96.9706 278.6163  1.00279836113914
+TDRS 8
+1 26388U 00034A   26233.90441519 -.00000199  00000+0  00000+0 0  9991
+2 26388  12.7855  30.7498 0002555  71.3375 278.4854  1.00275469 95838`;
 
 // Fixed TDRSS ground terminals shown on the tracker.
 const terminals = [
@@ -179,6 +204,12 @@ function GroundTrack({
   showGrid,
   showOrbits,
   showTdrs,
+  showIss,
+  showStarlink,
+  starlinks,
+  selectedStarlink,
+  starlinkTrack,
+  onSelectStarlink,
   utc,
 }: {
   t: Telemetry;
@@ -189,6 +220,12 @@ function GroundTrack({
   showGrid: boolean;
   showOrbits: boolean;
   showTdrs: boolean;
+  showIss: boolean;
+  showStarlink: boolean;
+  starlinks: CatalogSatellite[];
+  selectedStarlink: string;
+  starlinkTrack: Point[];
+  onSelectStarlink: (noradId: string) => void;
   utc: string;
 }) {
   const x = (t.longitude + 180) / 3.6,
@@ -245,6 +282,21 @@ function GroundTrack({
             )}
           </>
         )}
+        {showStarlink && selectedStarlink && (
+          <path className="starlink-track" d={svgPath(starlinkTrack)} />
+        )}
+        {showStarlink && starlinks.map((sat) => (
+          <circle
+            key={sat.noradId}
+            className={`starlink-marker ${sat.noradId === selectedStarlink ? "selected" : ""}`}
+            cx={(sat.lon + 180) / 3.6}
+            cy={(90 - sat.lat) / 1.8}
+            r={sat.noradId === selectedStarlink ? 0.55 : 0.2}
+            onClick={() => onSelectStarlink(sat.noradId)}
+          >
+            <title>{sat.name} | NORAD {sat.noradId} | {sat.alt.toFixed(0)} km</title>
+          </circle>
+        ))}
       </svg>
       {showTdrs &&
         terminals.map((s) => (
@@ -284,9 +336,9 @@ function GroundTrack({
             </span>
           </div>
         ))}
-      <div className="iss-dot" style={{ left: `${x}%`, top: `${y}%` }}>
+      {showIss && <div className="iss-dot" style={{ left: `${x}%`, top: `${y}%` }}>
         ✦<span>ISS</span>
-      </div>
+      </div>}
       <div className="map-data left">
         LAT {t.latitude.toFixed(2)}
         <br />
@@ -324,8 +376,7 @@ function GroundTrack({
         ISS↔TDRS <em>◆ TDRS</em>
       </div>
       <div className="map-footer">
-        ◉ LIVE CELESTRAK TDRSS GP DATA &nbsp; GREEN = GEOMETRIC LOS &nbsp; RELAY
-        ASSIGNMENT SIMULATED
+        ◉ CELESTRAK GP / COMMON-EPOCH SGP4 &nbsp; {starlinks.length} STARLINK OBJECTS &nbsp; RELAY ASSIGNMENT SIMULATED
       </div>
     </div>
   );
@@ -337,6 +388,8 @@ const menus: { [k: string]: string[] } = {
     "Toggle map grid",
     "Toggle orbit paths",
     "Toggle TDRSS network",
+    "Toggle ISS layer",
+    "Toggle Starlink layer",
     "Reset 3D cameras",
   ],
   Tracking: ["Center on ISS", "Sync propagation", "Run / hold propagation"],
@@ -358,11 +411,18 @@ export default function Home() {
     [showGrid, setShowGrid] = useState(true),
     [showOrbits, setShowOrbits] = useState(true),
     [showTdrs, setShowTdrs] = useState(true),
+    [showIss, setShowIss] = useState(true),
+    [showStarlink, setShowStarlink] = useState(true),
+    [starlinks, setStarlinks] = useState<CatalogSatellite[]>([]),
+    [selectedStarlink, setSelectedStarlink] = useState(""),
+    [starlinkTrack, setStarlinkTrack] = useState<Point[]>([]),
     [showViews, setShowViews] = useState(true),
     [mapMax, setMapMax] = useState(false),
     [cameraKey, setCameraKey] = useState(0),
-    [gpEpoch, setGpEpoch] = useState("LOADING"),
-    [tdrsEpochMs, setTdrsEpochMs] = useState(0),
+    [gpEpoch, setGpEpoch] = useState(() => tleEpoch(BUNDLED_ISS_TLE).toISOString().slice(0, 19).replace("T", " ")),
+    [tdrsEpochMs, setTdrsEpochMs] = useState(() => newestTleEpoch(BUNDLED_TDRSS_TLE).getTime()),
+    [tdrsLink, setTdrsLink] = useState(false),
+    [starlinkLink, setStarlinkLink] = useState(false),
     [lastElementUpdateMs, setLastElementUpdateMs] = useState(0),
     [lastPropagationMs, setLastPropagationMs] = useState(0),
     [lastSampleMs, setLastSampleMs] = useState(0),
@@ -374,8 +434,11 @@ export default function Home() {
       null,
     ),
     [samples, setSamples] = useState<CsvSample[]>([]);
-  const issTle = useRef("");
-  const tdrsTle = useRef("");
+  const issTle = useRef(BUNDLED_ISS_TLE);
+  const tdrsTle = useRef(BUNDLED_TDRSS_TLE);
+  const starlinkTle = useRef("");
+  const selectedStarlinkRef = useRef("");
+  const lastStarlinkPropagation = useRef(0);
   const pausedRef = useRef(paused);
   const simulationClock = useRef({ epochMs: Date.now(), wallMs: Date.now() });
   const sampleSequence = useRef(0);
@@ -416,35 +479,91 @@ export default function Home() {
     setPredicted(future);
     setNextOrbit(next);
     if (tdrsTle.current) {
-      setRelays(propagateRelays(tdrsTle.current, epoch, state));
+      try {
+        setRelays(propagateRelays(tdrsTle.current, epoch, state));
+      } catch {
+        setTdrsLink(false);
+      }
+    }
+    if (starlinkTle.current && epoch.getTime() - lastStarlinkPropagation.current >= 5000) {
+      try {
+        const catalog = propagateCatalog(starlinkTle.current, epoch);
+        if (!catalog.length) throw new Error("Empty Starlink catalog");
+        setStarlinks(catalog);
+        setStarlinkLink(true);
+        lastStarlinkPropagation.current = epoch.getTime();
+        if (selectedStarlinkRef.current) {
+          const selected = catalog.find((sat) => sat.noradId === selectedStarlinkRef.current);
+          setStarlinkTrack(selected ? propagateTrack(selected.tle, epoch, -50, 100, 0.75) : []);
+        }
+      } catch {
+        setStarlinkLink(false);
+      }
     }
     setLastPropagationMs(Date.now());
   };
 
+  const fetchFeed = async (mode: "iss" | "tdrs" | "starlink") => {
+    const response = await fetch(`/api/orbit?mode=${mode}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`${mode.toUpperCase()} feed HTTP ${response.status}`);
+    const text = await response.text();
+    if (!text.includes("\n1 ") || !text.includes("\n2 ")) throw new Error(`${mode.toUpperCase()} feed is not a TLE catalog`);
+    return text;
+  };
+
   const loadOrbitalElements = async (epoch: Date) => {
-    const [issResponse, tdrsResponse] = await Promise.all([
-      fetch("/api/orbit?mode=iss", { cache: "no-store" }),
-      fetch("/api/orbit?mode=tdrs", { cache: "no-store" }),
+    const [issResult, tdrsResult, starlinkResult] = await Promise.allSettled([
+      fetchFeed("iss"),
+      fetchFeed("tdrs"),
+      fetchFeed("starlink"),
     ]);
-    if (!issResponse.ok || !tdrsResponse.ok) {
-      throw new Error("Orbital element source unavailable");
+
+    if (issResult.status === "fulfilled") {
+      const nextIssTle = issResult.value;
+      const issEpoch = tleEpoch(nextIssTle);
+      propagateIss(nextIssTle, epoch);
+      issTle.current = nextIssTle;
+      setGpEpoch(issEpoch.toISOString().slice(0, 19).replace("T", " "));
+      setLastElementUpdateMs(Date.now());
+      setLink(true);
+    } else {
+      setLink(false);
+      if (!issTle.current) throw new Error("ISS ephemeris unavailable and no last-known-good set exists");
     }
-    const nextIssTle = await issResponse.text();
-    const nextTdrsTle = await tdrsResponse.text();
-    // Validate both payloads before replacing the last known-good solution.
-    const issEpoch = tleEpoch(nextIssTle);
-    const relayEpoch = newestTleEpoch(nextTdrsTle);
-    propagateIss(nextIssTle, epoch);
-    issTle.current = nextIssTle;
-    tdrsTle.current = nextTdrsTle;
-    setGpEpoch(
-      issEpoch.toISOString().slice(0, 19).replace("T", " "),
-    );
-    setTdrsEpochMs(relayEpoch.getTime());
-    setLastElementUpdateMs(Date.now());
+
+    if (tdrsResult.status === "fulfilled") {
+      try {
+        const relayEpoch = newestTleEpoch(tdrsResult.value);
+        // Validation happens before the last-known-good catalog is replaced.
+        const validation = propagateRelays(tdrsResult.value, epoch, propagateIss(issTle.current, epoch));
+        if (!validation.length) throw new Error("TDRSS catalog contains no propagatable relays");
+        tdrsTle.current = tdrsResult.value;
+        setTdrsEpochMs(relayEpoch.getTime());
+        setTdrsLink(true);
+      } catch {
+        setTdrsLink(false);
+      }
+    } else {
+      setTdrsLink(false);
+    }
+
+    if (starlinkResult.status === "fulfilled") {
+      try {
+        const validation = propagateCatalog(starlinkResult.value, epoch);
+        if (!validation.length) throw new Error("Starlink catalog contains no propagatable spacecraft");
+        starlinkTle.current = starlinkResult.value;
+        setStarlinks(validation);
+        setStarlinkLink(true);
+      } catch {
+        setStarlinkLink(false);
+      }
+    } else {
+      setStarlinkLink(false);
+    }
+
     propagateSameEpoch(epoch);
-    setLink(true);
-    setNotice("COMMON-EPOCH SGP4 SOLUTION VALID — ISS + TDRSS");
+    const degraded = [tdrsResult, starlinkResult].filter((result) => result.status === "rejected").length;
+    setNotice(degraded ? `ISS SOLUTION VALID — ${degraded} AUXILIARY FEED${degraded > 1 ? "S" : ""} DEGRADED / LAST-KNOWN-GOOD ACTIVE` : "COMMON-EPOCH SGP4 SOLUTION VALID — ISS + STARLINK + TDRSS");
   };
 
   const syncAll = async () => {
@@ -457,8 +576,7 @@ export default function Home() {
       await loadOrbitalElements(new Date(now));
       setCameraKey((value) => value + 1);
     } catch {
-      setLink(false);
-      setNotice("CELESTRAK LINK ERROR — RETAINING LAST VALID SOLUTION");
+      setNotice("ISS EPHEMERIS UNAVAILABLE — RETAINING LAST VALID SOLUTION");
     } finally {
       setSyncing(false);
     }
@@ -473,15 +591,20 @@ export default function Home() {
     const now = Date.now();
     simulationClock.current = { epochMs: now, wallMs: now };
     loadOrbitalElements(new Date(now)).catch(() => {
-      setLink(false);
-      setNotice("CELESTRAK LINK ERROR — WAITING FOR SYNC");
+      setNotice("ISS EPHEMERIS UNAVAILABLE — WAITING FOR SYNC");
     });
+    // Render a valid common-epoch degraded solution immediately; live network
+    // refresh continues independently in the background.
+    try {
+      propagateSameEpoch(new Date(now));
+    } catch {
+      setNotice("BUNDLED EPHEMERIS VALIDATION FAILED");
+    }
     const propagationTimer = setInterval(() => {
       if (!pausedRef.current) {
         try {
           propagateSameEpoch(new Date(currentSimulationEpoch()));
         } catch {
-          setLink(false);
           setNotice("PROPAGATION ERROR — DISPLAY FROZEN AT LAST VALID STATE");
         }
       }
@@ -567,6 +690,8 @@ export default function Home() {
     else if (item.includes("grid")) setShowGrid((v) => !v);
     else if (item.includes("orbit paths")) setShowOrbits((v) => !v);
     else if (item.includes("Toggle TDRSS")) setShowTdrs((v) => !v);
+    else if (item.includes("ISS layer")) setShowIss((v) => !v);
+    else if (item.includes("Starlink layer")) setShowStarlink((v) => !v);
     else if (item.includes("Reset 3D") || item.includes("Center on"))
       setCameraKey((v) => v + 1);
     else if (item.includes("Sync propagation")) syncAll();
@@ -580,7 +705,7 @@ export default function Home() {
     else if (item.includes("Data sources"))
       openDialog(
         "DATA SOURCES",
-        "ISS and TDRSS orbital elements: CelesTrak GP/TLE. Position and velocity: satellite.js SGP4/SDP4 at one shared UTC epoch. Map coordinates: WGS84 geodetic. 3D scene: ECI with Earth rotated by GMST. Earth and ISS geometry: local GLB assets.",
+        "ISS, Starlink and TDRSS orbital elements: CelesTrak GP/TLE. Positions: satellite.js SGP4/SDP4 at one shared UTC epoch. Starlink positions are propagated estimates from public elements, not live SpaceX telemetry. Map coordinates: WGS84 geodetic.",
       );
     else if (item.includes("Controls"))
       openDialog(
@@ -602,7 +727,8 @@ export default function Home() {
   const alerts: Alert[] = [
     { id: "link", severity: link ? "ok" : "warning", text: link ? "CELESTRAK LINK / LAST UPDATE VALID" : "CELESTRAK UPDATE UNAVAILABLE — LAST VALID DATA RETAINED" },
     { id: "prop", severity: !paused && lastPropagationMs && nowMs - lastPropagationMs > 5000 ? "warning" : paused ? "caution" : "ok", text: paused ? "PROPAGATION HELD BY OPERATOR" : lastPropagationMs && nowMs - lastPropagationMs > 5000 ? "PROPAGATION STALLED — EPOCH NOT ADVANCING" : "PROPAGATION CLOCK ADVANCING" },
-    { id: "tdrs", severity: tdrsEpochMs && nowMs - tdrsEpochMs > 7 * 86400000 ? "caution" : relays.length ? "ok" : "warning", text: !relays.length ? "TDRSS EPHEMERIS UNAVAILABLE" : tdrsEpochMs && nowMs - tdrsEpochMs > 7 * 86400000 ? `TDRSS EPHEMERIS STALE — ${((nowMs - tdrsEpochMs) / 86400000).toFixed(1)} DAYS` : "TDRSS EPHEMERIS CURRENT" },
+    { id: "tdrs", severity: tdrsEpochMs && nowMs - tdrsEpochMs > 7 * 86400000 ? "caution" : tdrsLink && relays.length ? "ok" : "warning", text: !tdrsLink ? (relays.length ? "TDRSS UPDATE DEGRADED — LAST-KNOWN-GOOD ACTIVE" : "TDRSS EPHEMERIS UNAVAILABLE") : tdrsEpochMs && nowMs - tdrsEpochMs > 7 * 86400000 ? `TDRSS EPHEMERIS STALE — ${((nowMs - tdrsEpochMs) / 86400000).toFixed(1)} DAYS` : "TDRSS EPHEMERIS CURRENT" },
+    { id: "starlink", severity: starlinkLink && starlinks.length ? "ok" : "caution", text: starlinkLink ? "STARLINK CATALOG CURRENT" : starlinks.length ? "STARLINK UPDATE DEGRADED — LAST-KNOWN-GOOD ACTIVE" : "STARLINK CATALOG UNAVAILABLE — ISS/TDRSS UNAFFECTED" },
     { id: "csv", severity: sampleCadenceOk && (!lastSampleMs || nowMs - lastSampleMs < 12500) ? "ok" : "warning", text: sampleCadenceOk && (!lastSampleMs || nowMs - lastSampleMs < 12500) ? "CSV LOGGER 10-SECOND CADENCE VALID" : "CSV LOGGER CADENCE MISSED" },
     ...Object.entries(assetWarnings).map(([id, text]) => ({ id, severity: "caution" as const, text })),
   ];
@@ -660,7 +786,7 @@ export default function Home() {
         <label>
           SCENARIO{" "}
           <select aria-label="Scenario">
-            <option>ISS + TDRSS NETWORK</option>
+            <option>ISS + STARLINK + TDRSS NETWORK</option>
           </select>
         </label>
         <label>
@@ -671,7 +797,7 @@ export default function Home() {
         className={`workspace ${mapMax ? "map-max" : ""} ${!showViews ? "views-hidden" : ""}`}
       >
         <div className="window map-window">
-          <Titlebar title="ISS / TDRSS Real-Time Network Map" />
+          <Titlebar title="ISS / STARLINK / TDRSS Real-Time Network Map" />
           <GroundTrack
             t={t}
             trail={trail}
@@ -681,6 +807,17 @@ export default function Home() {
             showGrid={showGrid}
             showOrbits={showOrbits}
             showTdrs={showTdrs}
+            showIss={showIss}
+            showStarlink={showStarlink}
+            starlinks={starlinks}
+            selectedStarlink={selectedStarlink}
+            starlinkTrack={starlinkTrack}
+            onSelectStarlink={(id) => {
+              setSelectedStarlink(id);
+              selectedStarlinkRef.current = id;
+              const selected = starlinks.find((sat) => sat.noradId === id);
+              if (selected) setStarlinkTrack(propagateTrack(selected.tle, new Date(currentSimulationEpoch()), -50, 100, 0.75));
+            }}
             utc={utc}
           />
         </div>
@@ -712,6 +849,22 @@ export default function Home() {
         )}
       </section>
       <div className="control-strip">
+        <div className="layer-controls">
+          <b>MAP LAYERS</b>
+          <label><input type="checkbox" checked={showIss} onChange={(e) => setShowIss(e.target.checked)} /> ISS</label>
+          <label><input type="checkbox" checked={showStarlink} onChange={(e) => setShowStarlink(e.target.checked)} /> STARLINK</label>
+          <label><input type="checkbox" checked={showTdrs} onChange={(e) => setShowTdrs(e.target.checked)} /> TDRSS</label>
+          <select aria-label="Selected Starlink satellite" value={selectedStarlink} onChange={(e) => {
+            const id = e.target.value;
+            setSelectedStarlink(id);
+            selectedStarlinkRef.current = id;
+            const selected = starlinks.find((sat) => sat.noradId === id);
+            setStarlinkTrack(selected ? propagateTrack(selected.tle, new Date(currentSimulationEpoch()), -50, 100, 0.75) : []);
+          }}>
+            <option value="">SELECT STARLINK…</option>
+            {starlinks.map((sat) => <option key={sat.noradId} value={sat.noradId}>{sat.name} · {sat.noradId}</option>)}
+          </select>
+        </div>
         <div>
           <b>PROPAGATION</b>
           <button
@@ -750,9 +903,10 @@ export default function Home() {
           <span className={link ? "green" : "red"}>■ ISS {link ? "VALID" : "DEGRADED"}</span>
           <span className={paused ? "amber" : "green"}>■ EPOCH {epochLabel} UTC</span>
           <span className={sampleCadenceOk ? "green" : "red"}>■ CSV {samples.length} SAMPLES</span>
-          <span className={relays.length ? "green" : "red"}>
+          <span className={tdrsLink && relays.length ? "green" : "red"}>
             ■ TDRSS {relays.length ? `${relays.length} OBJECTS` : "INIT"}
           </span>
+          <span className={starlinkLink && starlinks.length ? "green" : "red"}>■ STARLINK {starlinks.length || "INIT"}</span>
         </div>
       </div>
       <div className="annunciator" role="status" aria-live="polite">
