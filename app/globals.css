@@ -540,18 +540,29 @@ body {
   border-top: 1px solid #fff;
   background: #dedbd0;
   display: grid;
-  grid-template-columns: 260px 1fr 330px;
+  grid-template-columns:
+    minmax(340px, 1.35fr)
+    minmax(175px, 0.65fr)
+    minmax(300px, 1.15fr)
+    minmax(230px, 0.85fr);
   align-items: center;
   padding: 4px;
   gap: 8px;
 }
 .control-strip > div {
+  min-width: 0;
   height: 44px;
   border: 1px groove #fff;
   padding: 3px 5px;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.control-strip > div:nth-child(3),
+.control-strip > div:nth-child(4) {
+  flex-wrap: wrap;
+  align-content: center;
+  row-gap: 2px;
 }
 .control-strip b {
   font-size: 9px;
@@ -638,6 +649,16 @@ body {
   .statusbar span:nth-child(4),
   .statusbar span:nth-child(5) {
     display: none;
+  }
+}
+@media (min-width: 851px) and (max-width: 1180px) {
+  .desktop-shell {
+    grid-template-rows: 24px 22px 34px 1fr 98px 22px 20px;
+  }
+  .control-strip {
+    height: 98px;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    grid-template-rows: 44px 44px;
   }
 }
 @media (max-width: 520px) {
@@ -831,8 +852,8 @@ body {
 }
 .starlink-marker { fill: #63d9ff; opacity: .72; cursor: pointer; vector-effect: non-scaling-stroke; }
 .starlink-marker:hover, .starlink-marker.selected { fill: #fff; stroke: #ffdf42; stroke-width: .22; opacity: 1; }
-.starlink-track { fill: none; stroke: #ffdf42; stroke-width: .32; stroke-dasharray: 1.2 .65; filter: drop-shadow(0 0 1px #ffdf42); }
-.layer-controls { min-width: 320px; }
+.starlink-track { fill: none; stroke: #ff3fbd; stroke-width: .52; stroke-dasharray: 1.2 .65; opacity: 1; filter: drop-shadow(0 0 1.8px #ff3fbd); }
+.layer-controls { min-width: 0; }
 .layer-controls label { display: inline-flex !important; align-items: center; gap: 3px; margin-right: 7px; }
 .layer-controls input { accent-color: #49d5ff; }
-.layer-controls select { max-width: 190px; background: #081017; color: #d9f5ff; border: 1px solid #617888; font: inherit; }
+.layer-controls select { width: clamp(120px, 13vw, 190px); min-width: 0; background: #081017; color: #d9f5ff; border: 1px solid #617888; font: inherit; text-overflow: ellipsis; }
